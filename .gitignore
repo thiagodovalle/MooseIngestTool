@@ -1,0 +1,18 @@
+# Compiled and packaged files
+target/
+*.jar
+*.dmg
+*.app
+*.icns
+
+# Eclipse specific files
+.classpath
+.project
+.settings/
+
+# Mac OS specific files
+.DS_Store
+
+src/main/resources/credentials.json
+config.properties
+tokens/

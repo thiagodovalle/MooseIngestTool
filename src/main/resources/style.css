@@ -1,0 +1,61 @@
+/* Master Background and Font */
+.root {
+    -fx-background-color: #1e1e1e; /* Deep dark gray */
+    -fx-font-family: "Segoe UI", "Helvetica Neue", Helvetica, Arial, sans-serif;
+}
+
+/* Standard Text Labels */
+.label {
+    -fx-text-fill: #a0a0a5; /* Light gray for readability */
+    -fx-font-size: 13px;
+}
+
+/* The Title or Status Labels */
+.status-label {
+    -fx-text-fill: #ffffff;
+    -fx-font-weight: bold;
+    -fx-font-size: 14px;
+}
+
+/* Standard Buttons (Sleek dark buttons) */
+.button {
+    -fx-background-color: #323232;
+    -fx-text-fill: #ffffff;
+    -fx-font-weight: bold;
+    -fx-background-radius: 6px; /* Rounded corners */
+    -fx-padding: 10px 15px;
+    -fx-cursor: hand;
+    -fx-border-color: #454545;
+    -fx-border-radius: 6px;
+}
+
+/* Button Hover State */
+.button:hover {
+    -fx-background-color: #404040;
+}
+
+/* Disabled Button State */
+.button:disabled {
+    -fx-opacity: 0.4;
+}
+
+/* The Main "Start Ingest" Button (Brand Accent Color) */
+.action-button {
+    -fx-background-color: #d35400; /* Post-production Amber/Orange */
+    -fx-text-fill: #ffffff;
+    -fx-border-color: transparent;
+}
+
+.action-button:hover {
+    -fx-background-color: #e67e22; /* Lighter orange on hover */
+}
+
+/* The Progress Bar */
+.progress-bar {
+    -fx-accent: #d35400; /* Fills with our brand color */
+    -fx-control-inner-background: #2c2c2e; /* Dark track background */
+    -fx-background-radius: 6px;
+}
+.progress-bar > .bar {
+    -fx-background-radius: 6px;
+}
