@@ -4,7 +4,7 @@
   <groupId>com.MooseIngest</groupId>
   <artifactId>MooseIngestTool</artifactId>
   <name>Moose Ingest Tool</name>
-  <version>1.1.0</version>
+  <version>1.3.0</version>
   <build>
     <plugins>
       <plugin>

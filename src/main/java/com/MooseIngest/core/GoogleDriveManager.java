@@ -34,10 +34,15 @@ public class GoogleDriveManager {
     public GoogleDriveManager() throws Exception {
         final NetHttpTransport HTTP_TRANSPORT = GoogleNetHttpTransport.newTrustedTransport();
         
-        InputStream in = GoogleDriveManager.class.getResourceAsStream("/credentials.json");
-        if (in == null) throw new Exception("Cannot find credentials.json in resources folder!");
+        java.io.File credentialsFile = new java.io.File("credentials.json");
+        if (!credentialsFile.exists()) {
+            throw new Exception("Cannot find credentials.json in the root project folder!");
+        }
         
-        GoogleClientSecrets clientSecrets = GoogleClientSecrets.load(JSON_FACTORY, new InputStreamReader(in));
+        GoogleClientSecrets clientSecrets;
+        try (java.io.FileInputStream in = new java.io.FileInputStream(credentialsFile)) {
+            clientSecrets = GoogleClientSecrets.load(JSON_FACTORY, new java.io.InputStreamReader(in));
+        }
 
         GoogleAuthorizationCodeFlow flow = new GoogleAuthorizationCodeFlow.Builder(
                 HTTP_TRANSPORT, JSON_FACTORY, clientSecrets, SCOPES)
@@ -52,7 +57,6 @@ public class GoogleDriveManager {
                 .setApplicationName(APPLICATION_NAME)
                 .build();
     }
-
     private String extractFolderId(String input) {
         if (input == null || input.trim().isEmpty()) return "root"; 
         String id = input.trim();

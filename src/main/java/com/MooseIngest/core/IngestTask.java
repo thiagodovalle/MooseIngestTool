@@ -22,7 +22,6 @@ public class IngestTask extends Task<Boolean> {
     private List<File> destDirs;
     private boolean copyAllFiles;
     private boolean uploadToCloud; 
-    private String cloudTargetUrl; 
     private volatile boolean isPaused = false;
     private String sessionLogFileName;
 
@@ -35,13 +34,11 @@ public class IngestTask extends Task<Boolean> {
         }
     }
 
-
     public IngestTask(List<File> sourceDirs, List<File> destDirs, boolean copyAllFiles, boolean uploadToCloud) {
         this.sourceDirs = sourceDirs;
         this.destDirs = destDirs;
         this.copyAllFiles = copyAllFiles;
         this.uploadToCloud = uploadToCloud;
-        this.cloudTargetUrl = ""; // Defaults to empty since we read from config.properties now
         DateTimeFormatter fileFormatter = DateTimeFormatter.ofPattern("yyyy-MM-dd_HH-mm-ss");
         this.sessionLogFileName = "ingest_log_" + fileFormatter.format(LocalDateTime.now()) + ".csv";
     }
@@ -55,23 +52,27 @@ public class IngestTask extends Task<Boolean> {
         
         GoogleDriveManager driveManager = null;
         
+        // --- CLEANED UP AUTHENTICATION BLOCK ---
         if (uploadToCloud) {
             updateMessage("Authenticating with Google Drive...");
             try {
                 driveManager = new GoogleDriveManager();
             } catch (Exception e) {
                 System.err.println("Google Auth Failed!");
-                e.printStackTrace();
+                e.printStackTrace(); 
                 updateMessage("❌ ERROR: Google Drive Authentication Failed.");
                 return false;
             }
         }
+
+        if (isCancelled()) return false;
 
         updateMessage("Scanning files and folder structures...");
         List<MediaItem> allMedia = new ArrayList<>();
         long totalBatchBytes = 0;
 
         for (File src : sourceDirs) {
+            if (isCancelled()) return false;
             List<File> files = getFilesToCopy(src);
             for (File f : files) {
                 allMedia.add(new MediaItem(src, f));
@@ -90,14 +91,14 @@ public class IngestTask extends Task<Boolean> {
         long batchStartTime = System.currentTimeMillis();
 
         for (int i = 0; i < allMedia.size(); i++) {
+            if (isCancelled()) return handleCancellation();
+
             MediaItem item = allMedia.get(i);
             File currentFile = item.file;
             
             Path relativePath = item.sourceRoot.toPath().relativize(currentFile.toPath());
             String cardFolderName = item.sourceRoot.getName();
-            if (cardFolderName == null || cardFolderName.isEmpty()) {
-                cardFolderName = "Camera_Card"; 
-            }
+            if (cardFolderName == null || cardFolderName.isEmpty()) cardFolderName = "Camera_Card"; 
 
             if (currentFile.isDirectory()) {
                 for (File destRoot : destDirs) {
@@ -131,7 +132,17 @@ public class IngestTask extends Task<Boolean> {
                     int bytesRead;
                     
                     while ((bytesRead = fis.read(buffer)) != -1) {
+                        
+                        if (isCancelled()) {
+                            for (FileOutputStream fos : activeStreams) { fos.close(); }
+                            for (File destFile : allDestFilesForThisItem) {
+                                if (destFile.exists()) destFile.delete();
+                            }
+                            return false;
+                        }
+
                         while (isPaused) {
+                            if (isCancelled()) return handleCancellation();
                             updateMessage("⏸ PAUSED - " + currentFile.getName());
                             Thread.sleep(500);
                         }
@@ -157,11 +168,13 @@ public class IngestTask extends Task<Boolean> {
                 } catch (Exception e) {
                     for (FileOutputStream fos : activeStreams) { fos.close(); }
                     System.err.println("Transfer interrupted!");
-                    updateMessage("❌ ERROR: Drive Disconnected! Please reconnect and click Start again.");
+                    updateMessage("❌ ERROR: Drive Disconnected!");
                     return false;
                 }
 
                 for (FileOutputStream fos : activeStreams) { fos.close(); }
+
+                if (isCancelled()) return handleCancellation();
 
                 byte[] digestBytes = md5.digest();
                 StringBuilder hexString = new StringBuilder();
@@ -181,34 +194,35 @@ public class IngestTask extends Task<Boolean> {
                 writeLogToAllDests(currentFile, allDestFilesForThisItem, hexString.toString(), (System.currentTimeMillis() - fileStartTime), metadata);
             }
 
+            // --- ALL FILES GO TO GOOGLE DRIVE NOW ---
             if (uploadToCloud && driveManager != null) {
-                String name = currentFile.getName().toLowerCase();
-                if (name.endsWith(".mov") || name.endsWith(".mp4") || name.endsWith(".mxf") || name.endsWith(".braw") || name.endsWith(".r3d") || name.endsWith(".wav")) {
-                    
-                    updateMessage(String.format("☁️ Uploading to Google Drive: %s (This may take a while)", currentFile.getName()));
-                    
-                    // --- DYNAMICALLY READ HIDDEN ENVIRONMENT FOLDER ID ---
-                    String sharedStudioFolderId = "root"; 
-                    Properties prop = new Properties();
-                    try (FileInputStream configInput = new FileInputStream("config.properties")) {
-                        prop.load(configInput);
-                        sharedStudioFolderId = prop.getProperty("google.drive.shared.folder.id", "root");
-                    } catch (Exception ex) {
-                        System.out.println("⚠️ Warning: config.properties not found. Defaulting to Cloud Root.");
-                    }
-                    
-                    try {
-                        driveManager.uploadFile(currentFile, cardFolderName, sharedStudioFolderId);
-                    } catch (Exception e) {
-                        System.err.println("Failed to upload " + currentFile.getName() + " to Google Drive.");
-                        e.printStackTrace();
-                    }
+                if (isCancelled()) return handleCancellation();
+                
+                updateMessage(String.format("☁️ Uploading to Google Drive: %s (This may take a while)", currentFile.getName()));
+                
+                String sharedStudioFolderId = "root"; 
+                Properties prop = new Properties();
+                try (FileInputStream configInput = new FileInputStream("config.properties")) {
+                    prop.load(configInput);
+                    sharedStudioFolderId = prop.getProperty("google.drive.shared.folder.id", "root");
+                } catch (Exception ex) {}
+                
+                try {
+                    driveManager.uploadFile(currentFile, cardFolderName, sharedStudioFolderId);
+                } catch (Exception e) {
+                    System.err.println("Failed to upload " + currentFile.getName() + " to Google Drive.");
+                    e.printStackTrace();
                 }
             }
         }
 
         updateMessage("✅ Batch Ingest & Cloud Upload Complete!");
         return true;
+    }
+    
+    private boolean handleCancellation() {
+        updateMessage("🛑 Operation cancelled.");
+        return false;
     }
 
     private List<File> getFilesToCopy(File dir) {
@@ -248,8 +262,6 @@ public class IngestTask extends Task<Boolean> {
     }
 
     private void writeLogToAllDests(File sourceFile, List<File> destFiles, String md5Hash, long durationMs, String[] metadata) {
-        if (destFiles.isEmpty()) return; 
-
         DateTimeFormatter dtf = DateTimeFormatter.ofPattern("yyyy-MM-dd HH:mm:ss");
         String now = dtf.format(LocalDateTime.now());
         double durationSec = durationMs / 1000.0;
@@ -260,15 +272,36 @@ public class IngestTask extends Task<Boolean> {
         StringBuilder allDestsString = new StringBuilder();
         for (File f : destFiles) allDestsString.append(f.getAbsolutePath()).append("; ");
 
-        for (File destRoot : destDirs) {
-            File logFile = new File(destRoot, sessionLogFileName);
-            boolean isNewFile = !logFile.exists();
-            try (PrintWriter writer = new PrintWriter(new FileWriter(logFile, true))) {
-                if (isNewFile) writer.println("Date/Time,Original File,Source Path,All Destinations,File Size (Bytes),MD5 Checksum,Copy Duration (Sec),Codec,Resolution,Framerate");
-                writer.printf("\"%s\",\"%s\",\"%s\",\"%s\",%d,\"%s\",%.1f,\"%s\",\"%s\",\"%s\"%n",
-                        now, sourceFile.getName(), sourceFile.getAbsolutePath(), allDestsString.toString(), 
-                        sourceFile.length(), md5Hash, durationSec, codec, res, fps);
-            } catch (Exception e) { System.err.println("Failed to write log to " + destRoot.getAbsolutePath()); }
+        // Compile local CSV logs only if destination folders are present
+        if (!destFiles.isEmpty()) {
+            for (File destRoot : destDirs) {
+                File logFile = new File(destRoot, sessionLogFileName);
+                boolean isNewFile = !logFile.exists();
+                try (PrintWriter writer = new PrintWriter(new FileWriter(logFile, true))) {
+                    if (isNewFile) writer.println("Date/Time,Original File,Source Path,All Destinations,File Size (Bytes),MD5 Checksum,Copy Duration (Sec),Codec,Resolution,Framerate");
+                    writer.printf("\"%s\",\"%s\",\"%s\",\"%s\",%d,\"%s\",%.1f,\"%s\",\"%s\",\"%s\"%n",
+                            now, sourceFile.getName(), sourceFile.getAbsolutePath(), allDestsString.toString(), 
+                            sourceFile.length(), md5Hash, durationSec, codec, res, fps);
+                } catch (Exception e) {}
+            }
         }
+
+        // --- NEW BATCH ID GENERATION ---
+        String batchId = sessionLogFileName.replace(".csv", "").replace("ingest_log_", "Ingest_");
+
+        // Dispatch metadata synchronization payload to external Notion cloud database
+        NotionLogger.logToNotion(
+            batchId, // <--- Passing the Batch ID as the first parameter
+            sourceFile.getName(), 
+            now, 
+            sourceFile.getAbsolutePath(), 
+            allDestsString.length() == 0 ? "Cloud Only Ingest" : allDestsString.toString(), // <--- FIXED THIS LINE
+            sourceFile.length(), 
+            md5Hash, 
+            durationSec, 
+            codec, 
+            res, 
+            fps
+        );
     }
 }

@@ -32,34 +32,31 @@ public class MooseApp extends Application {
             logoView.setPreserveRatio(true);
         } catch (Exception e) {}
 
-        // --- SOURCES UI ---
+        // --- SOURCE SECTION ---
         Label sourceLabel = new Label("Source Folders (Camera Cards):");
         ListView<String> sourceListView = new ListView<>();
-        sourceListView.setPrefHeight(100);
-        
+        sourceListView.setPrefHeight(90);
         Button addSourceBtn = new Button("+ Add Source");
         Button clearSourcesBtn = new Button("Clear");
         HBox sourceBtns = new HBox(10, addSourceBtn, clearSourcesBtn);
 
-        // --- DESTINATIONS UI ---
+        // --- DESTINATION SECTION ---
         Label destLabel = new Label("Destination Folders (Local/Server):");
         ListView<String> destListView = new ListView<>();
-        destListView.setPrefHeight(100);
-        
+        destListView.setPrefHeight(90);
         Button addDestBtn = new Button("+ Add Destination");
         Button clearDestsBtn = new Button("Clear");
         HBox destBtns = new HBox(10, addDestBtn, clearDestsBtn);
 
-        // --- TOGGLES ---
+        // --- OPTIONS & CLOUD CONFIG ---
         CheckBox copyAllCheckbox = new CheckBox("Clone Entire Card (Include all XMLs, sidecars, and non-video files)");
         copyAllCheckbox.setSelected(true); 
         copyAllCheckbox.setStyle("-fx-text-fill: #a0a0a5; -fx-font-size: 13px;");
 
-        // NEW: Google Drive Toggle
-        CheckBox cloudUploadCheckbox = new CheckBox("☁️ Stream Directly to Google Drive (Bypasses Mac Storage)");
+        CheckBox cloudUploadCheckbox = new CheckBox("☁️ Stream Directly to Studio Google Drive");
         cloudUploadCheckbox.setStyle("-fx-text-fill: #a0a0a5; -fx-font-size: 13px; -fx-font-weight: bold;");
 
-        // --- CONTROLS ---
+        // --- CONTROL BUTTONS ---
         Button ingestButton = new Button("Start Batch Ingest");
         ingestButton.setMaxWidth(Double.MAX_VALUE);
         ingestButton.setDisable(true);
@@ -69,6 +66,12 @@ public class MooseApp extends Application {
         pauseButton.setVisible(false); 
         pauseButton.setManaged(false); 
         pauseButton.setPrefWidth(100);
+
+        Button cancelButton = new Button("🛑 Cancel");
+        cancelButton.setVisible(false); 
+        cancelButton.setManaged(false); 
+        cancelButton.setPrefWidth(100);
+        cancelButton.setStyle("-fx-background-color: #c0392b; -fx-text-fill: white;");
         
         ProgressBar progressBar = new ProgressBar(0);
         progressBar.setMaxWidth(Double.MAX_VALUE);
@@ -80,7 +83,7 @@ public class MooseApp extends Application {
 
         DirectoryChooser dirChooser = new DirectoryChooser();
 
-        // --- ACTIONS ---
+        // UI Listeners
         addSourceBtn.setOnAction(e -> {
             dirChooser.setTitle("Select Source Folder");
             File dir = dirChooser.showDialog(primaryStage);
@@ -113,9 +116,10 @@ public class MooseApp extends Application {
             checkReadyToIngest(ingestButton, cloudUploadCheckbox);
         });
 
-        // We check the logic whenever the cloud box is clicked too
+        // Trigger dynamic layout check if the cloud option is clicked
         cloudUploadCheckbox.setOnAction(e -> checkReadyToIngest(ingestButton, cloudUploadCheckbox));
 
+        // --- INGEST ACTION ---
         ingestButton.setOnAction(e -> {
             addSourceBtn.setDisable(true);
             clearSourcesBtn.setDisable(true);
@@ -128,22 +132,45 @@ public class MooseApp extends Application {
             pauseButton.setVisible(true); 
             pauseButton.setManaged(true);
             pauseButton.setDisable(false);
+            pauseButton.setText("⏸ Pause");
+            pauseButton.setStyle("");
+
+            cancelButton.setVisible(true);
+            cancelButton.setManaged(true);
+            cancelButton.setDisable(false);
             
             boolean copyAll = copyAllCheckbox.isSelected();
-            boolean uploadToCloud = cloudUploadCheckbox.isSelected(); // Grab the cloud decision
+            boolean uploadToCloud = cloudUploadCheckbox.isSelected(); 
             
             currentTask = new IngestTask(sourceDirs, destDirs, copyAll, uploadToCloud);
 
             progressBar.progressProperty().bind(currentTask.progressProperty());
             statusLabel.textProperty().bind(currentTask.messageProperty());
 
-            currentTask.setOnSucceeded(event -> {
+            Runnable resetUI = () -> {
+                addSourceBtn.setDisable(false);
+                clearSourcesBtn.setDisable(false);
+                addDestBtn.setDisable(false);
+                clearDestsBtn.setDisable(false);
+                copyAllCheckbox.setDisable(false);
+                cloudUploadCheckbox.setDisable(false);
+                ingestButton.setDisable(false);
+                
                 pauseButton.setVisible(false);
                 pauseButton.setManaged(false);
-            });
-            currentTask.setOnFailed(event -> {
-                pauseButton.setVisible(false);
-                pauseButton.setManaged(false);
+                cancelButton.setVisible(false);
+                cancelButton.setManaged(false);
+                
+                progressBar.progressProperty().unbind();
+            };
+
+            currentTask.setOnSucceeded(event -> resetUI.run());
+            currentTask.setOnFailed(event -> resetUI.run());
+            currentTask.setOnCancelled(event -> {
+                resetUI.run();
+                progressBar.setProgress(0);
+                statusLabel.textProperty().unbind(); // Detach from the background engine
+                statusLabel.setText("🛑 Operation cancelled."); // Post the final message
             });
 
             Thread backgroundThread = new Thread(currentTask);
@@ -151,12 +178,13 @@ public class MooseApp extends Application {
             backgroundThread.start();
         });
 
+        // --- PAUSE ACTION ---
         pauseButton.setOnAction(e -> {
             if (currentTask != null) {
                 currentTask.togglePause();
                 if (pauseButton.getText().equals("⏸ Pause")) {
                     pauseButton.setText("▶ Resume");
-                    pauseButton.setStyle("-fx-background-color: #27ae60;");
+                    pauseButton.setStyle("-fx-background-color: #27ae60; -fx-text-fill: white;");
                 } else {
                     pauseButton.setText("⏸ Pause");
                     pauseButton.setStyle(""); 
@@ -164,12 +192,23 @@ public class MooseApp extends Application {
             }
         });
 
+        // --- CANCEL ACTION ---
+        cancelButton.setOnAction(e -> {
+            if (currentTask != null) {
+                statusLabel.textProperty().unbind();
+                statusLabel.setText("🛑 Cancelling operations and cleaning up locks...");
+                cancelButton.setDisable(true);
+                pauseButton.setDisable(true);
+                currentTask.cancel(true); // Tells the thread loop to kill itself
+            }
+        });
+
         HBox progressRow = new HBox(10);
         progressRow.setAlignment(Pos.CENTER_LEFT);
-        progressRow.getChildren().addAll(progressBar, pauseButton);
+        progressRow.getChildren().addAll(progressBar, pauseButton, cancelButton);
 
         VBox layout = new VBox(12);
-        layout.setPadding(new Insets(30));
+        layout.setPadding(new Insets(25));
         layout.setAlignment(Pos.TOP_CENTER);
         
         layout.getChildren().addAll(
@@ -177,20 +216,21 @@ public class MooseApp extends Application {
             sourceLabel, sourceListView, sourceBtns,
             destLabel, destListView, destBtns,
             copyAllCheckbox, 
-            cloudUploadCheckbox, // Appears right below copy all
+            cloudUploadCheckbox, 
             ingestButton, progressRow, statusLabel
         );
 
-        Scene scene = new Scene(layout, 700, 750); 
-        try { scene.getStylesheets().add(getClass().getResource("/style.css").toExternalForm()); } catch (Exception e) {}
+        Scene scene = new Scene(layout, 720, 780); 
+        try { scene.getStylesheets().add(getClass().getResource("/style.css").toExternalForm()); } catch (Exception ex) {}
 
-        primaryStage.setTitle("Moose Ingest Tool");
+        primaryStage.setTitle("Moose Ingest Tool v1.3");
         primaryStage.setScene(scene);
         primaryStage.show();
     }
 
-    // UPDATED logic: We allow ingest if they have a source AND (either a local dest OR the cloud box is checked)
+    // --- UPDATED METHOD FOR DESTINATION INDEPENDENCE ---
     private void checkReadyToIngest(Button ingestBtn, CheckBox cloudBox) {
+        // Ready if there is a source AND (either a local destination exists OR cloud streaming is selected)
         if (!sourceDirs.isEmpty() && (!destDirs.isEmpty() || cloudBox.isSelected())) {
             ingestBtn.setDisable(false);
         } else {
